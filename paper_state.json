@@ -1,10 +1,38 @@
 {
-  "cash": 20.0,
-  "positions": {},
+  "cash": 9.990000000000002,
+  "positions": {
+    "BTC-USDT": {
+      "quantity": 7.673961022417174e-05,
+      "cost": 5.005,
+      "entry_price": 65155.4
+    },
+    "ETH-USDT": {
+      "quantity": 0.0027310763718196617,
+      "cost": 5.005,
+      "entry_price": 1830.78
+    }
+  },
   "last_candles": {
-    "BTC-USDT": "1794955500000",
-    "ETH-USDT": "1794955500000"
+    "BTC-USDT": "1794956400000",
+    "ETH-USDT": "1794956400000"
   },
   "realized_pnl": 0.0,
-  "trades": []
+  "trades": [
+    {
+      "symbol": "BTC-USDT",
+      "action": "\u6a21\u62df\u4e70\u5165",
+      "price": 65155.4,
+      "amount": 5.0,
+      "fee": 0.005,
+      "time": "2026-11-17T23:25:45.219830+00:00"
+    },
+    {
+      "symbol": "ETH-USDT",
+      "action": "\u6a21\u62df\u4e70\u5165",
+      "price": 1830.78,
+      "amount": 5.0,
+      "fee": 0.005,
+      "time": "2026-11-17T23:25:45.402899+00:00"
+    }
+  ]
 }
