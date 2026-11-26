@@ -398,31 +398,30 @@ def main():
     if not LIVE or CONFIRM != "YES":
         raise RuntimeError("实盘开关未确认：需要 LIVE_TRADING=true 且 CONFIRM_10X_LIVE=YES")
 
-    print("OKX USDT 永续策略：常驻无限循环")
-    print(f"杠杆设置目标：{LEVERAGE}x，逐仓")
-    print(f"每个币种保证金预算：{MARGIN_USDT} USDT；标的：{', '.join(SYMBOLS)}")
-    print(f"止盈：{TAKE_PROFIT * 100}% | 止损：{STOP_LOSS * 100}% | 检查间隔：{INTERVAL}秒")
-    print("注意：止盈止损触发价按开仓前行情估算；止损不保证成交价，可能滑点或强平。")
+    print("OKX USDT 永续策略：本次执行一轮")
+    print(f"杠杆目标：{LEVERAGE}x，逐仓")
+    print(f"每个币种保证金预算：{MARGIN_USDT} USDT")
+    print(f"标的：{', '.join(SYMBOLS)}")
+    print(f"止盈：{TAKE_PROFIT * 100}% | 止损：{STOP_LOSS * 100}%")
 
     check_account()
     state = load_state()
     if state.get("pending"):
-        raise RuntimeError("发现未处理订单，停止；先检查交易所订单和持仓")
+        raise RuntimeError("发现未处理订单，停止；先检查 OKX 订单和持仓")
+
+    # 先检查是否存在未登记仓位，避免贸然修改其杠杆
+    for inst_id in SYMBOLS:
+        position = get_position(inst_id)
+        if position and not state["positions"].get(inst_id):
+            raise RuntimeError(
+                f"{inst_id} 有未登记的交易所仓位，停止操作，不会擅自接管"
+            )
 
     for inst_id in SYMBOLS:
         set_leverage(inst_id)
 
-    while True:
-        started = time.time()
-        try:
-            run_once()
-        except Exception as exc:
-            # 订单状态不确定时，pending 锁会阻止下一轮重复开仓
-            print(f"本轮运行异常：{type(exc).__name__}: {exc}", flush=True)
-        elapsed = time.time() - started
-        sleep_for = max(1, INTERVAL - int(elapsed))
-        print(f"本轮结束，{sleep_for}秒后进行下一轮", flush=True)
-        time.sleep(sleep_for)
+    run_once()
+    print("本轮执行结束")
 
 
 if __name__ == "__main__":
