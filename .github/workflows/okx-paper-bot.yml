@@ -21,17 +21,36 @@ jobs:
     steps:
       - name: 获取仓库代码
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: 执行 OKX 实盘策略
+      - name: 执行一轮 OKX 策略
         env:
           OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
           OKX_API_SECRET: ${{ secrets.OKX_API_SECRET }}
           OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
           LIVE_TRADING: ${{ secrets.LIVE_TRADING }}
           CONFIRM_10X_LIVE: ${{ secrets.CONFIRM_10X_LIVE }}
-        run: python bot.py
+        run: |
+          set +e
+          python bot.py
+          BOT_EXIT=$?
+          set -e
+
+          if [ -f swap_state.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add swap_state.json
+
+            if ! git diff --cached --quiet; then
+              git commit -m "Save OKX trading state"
+              git push origin HEAD:main
+            fi
+          fi
+
+          exit "$BOT_EXIT"
