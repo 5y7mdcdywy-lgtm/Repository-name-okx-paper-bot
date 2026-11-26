@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 # ===== 实盘配置 =====
-BASE = "https://openapi.okx.com""
+BASE = "https://openapi.okx.com"
 SYMBOLS = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
 LEVERAGE = Decimal("10")
 MARGIN_USDT = Decimal("5")       # 每个币种的保证金预算，不是下单名义价值
