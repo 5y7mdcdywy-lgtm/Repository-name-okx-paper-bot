@@ -162,8 +162,9 @@ def get_instrument(inst_id):
         raise RuntimeError(f"合约当前不可交易: {inst_id}")
     if info.get("ctType") != "linear" or info.get("settleCcy") != "USDT":
         raise RuntimeError(f"{inst_id} 不是 USDT 正向线性永续合约")
-    if info.get("ctValCcy") != info.get("baseCcy"):
-        raise RuntimeError(f"{inst_id} 合约面值币种与基础币种不一致，拒绝自动计算张数")
+    expected_ccy = inst_id.split("-")[0]
+    if info.get("ctValCcy") != expected_ccy:
+        raise RuntimeError(f"{inst_id} 合约面值币种异常，拒绝下单")
     return info
 
 
