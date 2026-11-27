@@ -216,6 +216,7 @@ def set_leverage(inst):
         )
 
     print(inst, "双向逐仓10倍杠杆核验通过")
+def instrument(inst):
     rows = get("/api/v5/public/instruments", {
         "instType": "SWAP", "instId": inst
     }, private=False)
