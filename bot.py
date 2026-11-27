@@ -663,16 +663,76 @@ def main():
         raise RuntimeError("缺少OKX API凭据")
     if not LIVE or CONFIRM != "YES":
         raise RuntimeError("实盘开关未确认；当前程序不会下单。")
+
     print("OKX双向永续策略启动")
-    print("标的:", SYMBOLS, "逐仓杠杆:", LEVERAGE)
-    print("每币保证金预算:", MARGIN_USDT, "止盈:", TAKE_PROFIT, "止损:", STOP_LOSS)
     check_account()
+
     s = load_state()
-    if s.get("pending"):
-        raise RuntimeError("存在未完成订单，停止运行")
+    pending = s.get("pending")
+
+    if pending:
+        inst = pending.get("instId")
+        cl_id = pending.get("clOrdId")
+
+        if inst not in SYMBOLS or not cl_id:
+            raise RuntimeError("旧订单记录信息不完整，停止运行")
+
+        print("正在核实旧订单:", inst, cl_id)
+
+        # 查询交易所当前未完成普通订单
+        open_orders = get(
+            "/api/v5/trade/orders-pending",
+            {"instType": "SWAP", "instId": inst}
+        )
+
+        if any(x.get("clOrdId") == cl_id for x in open_orders):
+            raise RuntimeError("旧订单仍在交易所挂单，停止运行")
+
+        # 查询交易所最近历史订单
+        history = get(
+            "/api/v5/trade/orders-history",
+            {"instType": "SWAP", "instId": inst, "limit": "100"}
+        )
+
+        matched = [x for x in history if x.get("clOrdId") == cl_id]
+
+        if not matched:
+            raise RuntimeError("历史订单中找不到旧订单，不能安全清除记录")
+
+        order = matched[0]
+        state = order.get("state")
+
+        if state not in ("filled", "canceled", "mmp_canceled"):
+            raise RuntimeError("旧订单状态未结束: " + str(state))
+
+        # 核对 BTC、ETH 两个合约的实际持仓
+        for symbol in SYMBOLS:
+            actual = positions(symbol)
+            if actual:
+                raise RuntimeError(
+                    symbol + "仍有实际持仓，停止清理和交易"
+                )
+
+        # 核对旧订单对应合约是否仍有策略委托
+        algos = get(
+            "/api/v5/trade/orders-algo-pending",
+            {"ordType": "conditional", "instId": inst}
+        )
+        if algos:
+            raise RuntimeError("交易所仍有策略委托，停止清理")
+
+        s["pending"] = None
+        save_state(s)
+
+        print("旧订单已核实结束，旧状态记录已清理。")
+        print("本次只做核对，不下单。")
+        raise RuntimeError("核对完成，请确认后再手动运行")
+
     reconcile_state()
+
     for inst in SYMBOLS:
         set_leverage(inst)
+
     run_once()
     print("本轮执行完成")
 
