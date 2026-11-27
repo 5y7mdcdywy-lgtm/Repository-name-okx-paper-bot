@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -348,20 +347,26 @@ def signal(inst):
 
 
 # ================= 订单查询 =================
-def order_detail(inst, ord_id):
-    rows = get(
-        "/api/v5/trade/order",
-        {"instId": inst, "ordId": ord_id},
-    )
+def order_detail(inst, ord_id=None, cl_ord_id=None):
+    params = {"instId": inst}
+    if ord_id:
+        params["ordId"] = ord_id
+    elif cl_ord_id:
+        params["clOrdId"] = cl_ord_id
+    else:
+        raise RuntimeError("查询订单缺少ordId/clOrdId")
+    rows = get("/api/v5/trade/order", params)
     if not rows:
         raise RuntimeError("无法查询开仓订单详情")
     return rows[0]
 
 
-def algo_detail(algo_id):
+def algo_detail(algo_cl_ord_id):
+    # 附带策略单成交后，客户自定义ID对应 algoClOrdId，
+    # attachAlgoId 不能直接当普通 algoId 查询。
     rows = get(
         "/api/v5/trade/order-algo",
-        {"algoId": algo_id},
+        {"algoClOrdId": algo_cl_ord_id},
     )
     if not rows:
         raise RuntimeError("无法查询止盈止损策略委托详情")
@@ -389,19 +394,7 @@ def wait_position(inst, side):
 
 
 # ================= 保护单核实及修正 =================
-def verify_and_fix_protection(inst, side, ord_id, avg_px, tick):
-    detail = order_detail(inst, ord_id)
-    attached = detail.get("attachAlgoOrds") or []
-
-    algo_ids = [
-        a.get("attachAlgoId")
-        for a in attached
-        if a.get("attachAlgoId")
-    ]
-
-    if not algo_ids:
-        raise RuntimeError("主订单没有返回附带止盈止损ID")
-
+def verify_and_fix_protection(inst, side, algo_cl_ord_id, avg_px, tick):
     expected_tp = (
         avg_px * (D(1) + TAKE_PROFIT)
         if side == "long"
@@ -422,23 +415,32 @@ def verify_and_fix_protection(inst, side, ord_id, avg_px, tick):
         ROUND_DOWN if side == "long" else ROUND_UP
     )
 
-    verified = False
+    last_error = None
+    for attempt in range(POLL_TRIES):
+        try:
+            a = algo_detail(algo_cl_ord_id)
+            if a.get("state") != "live":
+                raise RuntimeError(
+                    "止盈止损策略单不是live状态: " + str(a.get("state"))
+                )
 
-    for algo_id in algo_ids:
-        a = algo_detail(algo_id)
+            tp = D(a.get("tpTriggerPx") or "0")
+            sl = D(a.get("slTriggerPx") or "0")
+            tp_ord_px = str(a.get("tpOrdPx") or "")
+            sl_ord_px = str(a.get("slOrdPx") or "")
+            tp_type = str(a.get("tpTriggerPxType") or "")
+            sl_type = str(a.get("slTriggerPxType") or "")
 
-        if a.get("state") not in ("live", "effective", "partially_effective"):
-            continue
+            correct = (
+                tp == expected_tp and sl == expected_sl
+                and tp_ord_px == "-1" and sl_ord_px == "-1"
+                and tp_type == "mark" and sl_type == "mark"
+            )
 
-        tp = D(a.get("tpTriggerPx") or "0")
-        sl = D(a.get("slTriggerPx") or "0")
-
-        if tp > 0 and sl > 0:
-            # 以实际成交均价为基准，修正保护价格
-            if tp != expected_tp or sl != expected_sl:
+            if not correct:
                 changed = post("/api/v5/trade/amend-algos", {
                     "instId": inst,
-                    "algoId": algo_id,
+                    "algoClOrdId": algo_cl_ord_id,
                     "newTpTriggerPx": str(expected_tp),
                     "newTpOrdPx": "-1",
                     "newTpTriggerPxType": "mark",
@@ -446,62 +448,122 @@ def verify_and_fix_protection(inst, side, ord_id, avg_px, tick):
                     "newSlOrdPx": "-1",
                     "newSlTriggerPxType": "mark",
                 })
-
                 if not changed or changed[0].get("sCode") != "0":
-                    raise RuntimeError("修正止盈止损价格失败")
-
+                    raise RuntimeError(
+                        "修正止盈止损失败: " +
+                        str(changed[0] if changed else "空响应")
+                    )
                 time.sleep(1)
-                a = algo_detail(algo_id)
+                a = algo_detail(algo_cl_ord_id)
 
             if (
-                a.get("state") in ("live", "effective", "partially_effective")
+                a.get("state") == "live"
                 and D(a.get("tpTriggerPx") or "0") == expected_tp
                 and D(a.get("slTriggerPx") or "0") == expected_sl
+                and str(a.get("tpOrdPx") or "") == "-1"
+                and str(a.get("slOrdPx") or "") == "-1"
+                and str(a.get("tpTriggerPxType") or "") == "mark"
+                and str(a.get("slTriggerPxType") or "") == "mark"
             ):
-                verified = True
-                print("保护单确认:", algo_id)
+                print("止盈止损双重核验通过:", algo_cl_ord_id)
                 print("实际均价:", avg_px)
-                print("止盈价:", expected_tp)
-                print("止损价:", expected_sl)
-                break
+                print("止盈价:", expected_tp, "止损价:", expected_sl)
+                return {
+                    "algoClOrdId": algo_cl_ord_id,
+                    "avgPx": str(avg_px),
+                    "tp": str(expected_tp),
+                    "sl": str(expected_sl),
+                    "triggerType": "mark",
+                    "orderType": "market",
+                }
+            raise RuntimeError("止盈止损回读值与设定值不一致")
+        except Exception as e:
+            last_error = e
+            if attempt < POLL_TRIES - 1:
+                time.sleep(POLL_SECONDS)
 
-    if not verified:
-        raise RuntimeError("止盈止损未能核实，必须停止交易")
-
-    return {
-        "algoIds": algo_ids,
-        "avgPx": str(avg_px),
-        "tp": str(expected_tp),
-        "sl": str(expected_sl),
-    }
+    raise RuntimeError("止盈止损无法确认: " + str(last_error))
 
 
 # ================= 故障时尝试平仓 =================
-def emergency_close(inst, side):
-    p = positions(inst)
-    if side not in p:
-        print("故障时未发现对应持仓")
-        return
+def emergency_close(inst, side, entry_ord_id=None, entry_cl_ord_id=None,
+                    algo_cl_ord_id=None):
+    # 先撤销尚未完成的开仓主单，防止剩余数量在平仓后再次成交。
+    if entry_ord_id or entry_cl_ord_id:
+        try:
+            od = order_detail(inst, entry_ord_id, entry_cl_ord_id)
+            if od.get("state") in ("live", "partially_filled"):
+                cancel_params = {"instId": inst}
+                if od.get("ordId"):
+                    cancel_params["ordId"] = od["ordId"]
+                else:
+                    cancel_params["clOrdId"] = entry_cl_ord_id
+                canceled = post("/api/v5/trade/cancel-order", cancel_params)
+                if not canceled or canceled[0].get("sCode") != "0":
+                    raise RuntimeError("撤销未完成开仓主单失败")
 
-    size = abs(D(p[side]["pos"]))
-    close_side = "sell" if side == "long" else "buy"
+                for _ in range(POLL_TRIES):
+                    time.sleep(1)
+                    od = order_detail(inst, entry_ord_id, entry_cl_ord_id)
+                    if od.get("state") in ("canceled", "filled", "mmp_canceled"):
+                        break
 
-    result = post("/api/v5/trade/order", {
-        "instId": inst,
-        "tdMode": "isolated",
-        "posSide": side,
-        "side": close_side,
-        "ordType": "market",
-        "sz": str(size),
-        "clOrdId": uuid.uuid4().hex[:24],
-    })
+                if od.get("state") not in ("canceled", "filled", "mmp_canceled"):
+                    raise RuntimeError("开仓主单撤销状态无法确认")
+        except Exception as e:
+            raise RuntimeError("无法确认开仓主单已停止: " + str(e))
 
-    if not result or result[0].get("sCode") != "0":
-        raise RuntimeError(
-            "紧急平仓请求未获确认，请立即在OKX手动检查持仓"
-        )
+    # 主单停止后，才处理已成交仓位。
+    for _ in range(POLL_TRIES):
+        p = positions(inst)
+        if side not in p:
+            print("故障处理：交易所当前没有该方向持仓")
+            break
 
-    print("已发送紧急平仓请求，请核对交易所持仓")
+        size = abs(D(p[side]["pos"]))
+        if size <= 0:
+            break
+
+        close_side = "sell" if side == "long" else "buy"
+        result = post("/api/v5/trade/order", {
+            "instId": inst,
+            "tdMode": "isolated",
+            "posSide": side,
+            "side": close_side,
+            "ordType": "market",
+            "sz": str(size),
+            "clOrdId": uuid.uuid4().hex[:24],
+        })
+        if not result or result[0].get("sCode") != "0":
+            raise RuntimeError("紧急市价平仓请求失败，请立即检查OKX持仓")
+
+        flat = False
+        for _ in range(POLL_TRIES):
+            time.sleep(POLL_SECONDS)
+            if side not in positions(inst):
+                flat = True
+                break
+        if flat:
+            break
+
+    if side in positions(inst):
+        raise RuntimeError("紧急平仓后仍检测到持仓，必须立即人工处理")
+
+    # 确认仓位归零后，再撤销仍处于live状态的附带保护策略。
+    if algo_cl_ord_id:
+        try:
+            a = algo_detail(algo_cl_ord_id)
+            if a.get("state") == "live" and a.get("algoId"):
+                canceled = post("/api/v5/trade/cancel-algos", [{
+                    "instId": inst,
+                    "algoId": a["algoId"],
+                }])
+                if not canceled or canceled[0].get("sCode") != "0":
+                    raise RuntimeError("撤销孤立止盈止损策略失败")
+        except Exception as e:
+            print("保护策略撤销未能确认，请人工检查OKX策略委托:", e)
+
+    print("紧急平仓已由交易所持仓回读确认归零")
 
 
 # ================= 开仓 =================
@@ -540,6 +602,7 @@ def enter(inst, side, info):
         tp = round_step(px * (D(1) - TAKE_PROFIT), tick, ROUND_DOWN)
         sl = round_step(px * (D(1) + STOP_LOSS), tick, ROUND_UP)
 
+    ord_id = None
     try:
         result = post("/api/v5/trade/order", {
             "instId": inst,
@@ -579,7 +642,7 @@ def enter(inst, side, info):
             raise RuntimeError("订单成交后未检测到对应持仓")
 
         protection = verify_and_fix_protection(
-            inst, side, ord_id, avg_px, tick
+            inst, side, algo_client_id, avg_px, tick
         )
 
         s = load_state()
@@ -598,7 +661,9 @@ def enter(inst, side, info):
     except Exception as e:
         print("开仓流程异常:", str(e))
         try:
-            emergency_close(inst, side)
+            emergency_close(
+                inst, side, ord_id, client_id, algo_client_id
+            )
         except Exception as close_error:
             print("紧急平仓也未能确认:", close_error)
 
