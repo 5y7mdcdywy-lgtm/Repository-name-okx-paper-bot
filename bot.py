@@ -702,11 +702,7 @@ if state not in ("filled", "canceled", "mmp_canceled"):
 
         matched = [x for x in history if x.get("clOrdId") == cl_id]
 
-        if not matched:
-            raise RuntimeError("历史订单中找不到旧订单，不能安全清除记录")
 
-        order = matched[0]
-        state = order.get("state")
 
         if state not in ("filled", "canceled", "mmp_canceled"):
             raise RuntimeError("旧订单状态未结束: " + str(state))
