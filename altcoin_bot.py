@@ -26,12 +26,19 @@ HTTP_TIMEOUT = 20
 POLL_TRIES = 15
 POLL_SECONDS = 2
 
+DEMO = os.getenv("ALTCOIN_DEMO_TRADING", "false").lower() == "true"
 LIVE = os.getenv("ALTCOIN_LIVE_TRADING", "false").lower() == "true"
 CONFIRM = os.getenv("CONFIRM_ALTCOIN_5X_LIVE", "").strip()
 
-KEY = os.getenv("OKX_API_KEY", "").strip()
-SECRET = os.getenv("OKX_API_SECRET", "").strip()
-PASSPHRASE = os.getenv("OKX_PASSPHRASE", "").strip()
+# Demo credentials are strictly separated from live credentials.
+if DEMO:
+    KEY = os.getenv("OKX_DEMO_API_KEY", "").strip()
+    SECRET = os.getenv("OKX_DEMO_API_SECRET", "").strip()
+    PASSPHRASE = os.getenv("OKX_DEMO_PASSPHRASE", "").strip()
+else:
+    KEY = os.getenv("OKX_API_KEY", "").strip()
+    SECRET = os.getenv("OKX_API_SECRET", "").strip()
+    PASSPHRASE = os.getenv("OKX_PASSPHRASE", "").strip()
 
 
 # ================= 基础工具 =================
@@ -59,6 +66,8 @@ def api(method, path, params=None, body=None, private=False):
     }
 
     if private:
+        if DEMO:
+            headers["x-simulated-trading"] = "1"
         if not KEY or not SECRET or not PASSPHRASE:
             raise RuntimeError("API密钥不完整")
         ts = now()
@@ -720,14 +729,18 @@ def preflight():
 
 
 def main():
-    if not LIVE or CONFIRM != "YES":
+    if DEMO:
+        if not KEY or not SECRET or not PASSPHRASE:
+            raise RuntimeError("模拟盘开关已启用，但缺少独立OKX模拟盘API凭据")
+        print("OKX山寨币超短线策略启动（模拟盘，5倍逐仓）；请求带模拟交易标记。")
+    elif not LIVE or CONFIRM != "YES":
         preflight()
         print("实盘开关未启用；本轮只读检查结束，不会交易。")
         return
-    if not KEY or not SECRET or not PASSPHRASE:
-        raise RuntimeError("实盘开关已启用，但缺少OKX API凭据")
-
-    print("OKX山寨币超短线策略启动（5倍逐仓）")
+    else:
+        if not KEY or not SECRET or not PASSPHRASE:
+            raise RuntimeError("实盘开关已启用，但缺少OKX API凭据")
+        print("OKX山寨币超短线策略启动（实盘，5倍逐仓）")
     check_account()
 
     s = load_state()
