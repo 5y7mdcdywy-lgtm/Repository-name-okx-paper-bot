@@ -48,8 +48,10 @@ def request(method, path, params=None, body=None, private=False):
     request_path = path + query
     body_text = json.dumps(body, separators=(",", ":"), ensure_ascii=False) if body is not None else ""
     headers = {
-        "Content-Type": "application/json"
-    }
+       headers = {
+    "Content-Type": "application/json",
+    "User-Agent": "OKXTradingBot/1.0"
+}
 
     if private:
         message_time = timestamp()
