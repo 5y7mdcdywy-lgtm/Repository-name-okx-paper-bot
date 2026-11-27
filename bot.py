@@ -700,29 +700,53 @@ def main():
         ]
 
         if not matched:
-            fills = get(
-                "/api/v5/trade/fills-history",
-                {
-                    "instType": "SWAP",
-                    "instId": inst,
-                    "limit": "100"
-                }
-            )
+            fills = []
+            params = {
+                "instType": "SWAP",
+                "instId": inst,
+                "limit": "100"
+            }
+
+            for page in range(100):
+                batch = get(
+                    "/api/v5/trade/fills-history",
+                    params
+                )
+
+                if not batch:
+                    break
+
+                fills.extend(batch)
+
+                if len(batch) < 100:
+                    break
+
+                cursor = batch[-1].get("billId")
+                if not cursor:
+                    raise RuntimeError(
+                        "成交记录缺少分页编号，保持锁定"
+                    )
+
+                params["after"] = cursor
+            else:
+                raise RuntimeError(
+                    "成交记录超过10000条，未能完整核对，保持锁定"
+                )
 
             fill_matches = [
                 x for x in fills
                 if x.get("clOrdId") == cl_id
             ]
 
+            print("三个月成交记录核查数量：", len(fills))
+            print("匹配旧订单数量：", len(fill_matches))
+
             if fill_matches:
                 print("找到旧订单成交记录：", fill_matches)
-            else:
-                print("最近返回的成交记录中没有找到该订单编号")
 
             raise RuntimeError(
                 "旧订单仍未完全核实，保持锁定，禁止清除pending"
             )
-
         order = matched[0]
         state = order.get("state")
 
