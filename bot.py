@@ -688,7 +688,7 @@ def main():
         if any(x.get("clOrdId") == cl_id for x in open_orders):
             raise RuntimeError("旧订单仍在交易所挂单，停止运行")
 
-                        # 按订单编号查询交易所订单详情
+        # 按订单编号查询交易所订单详情
         try:
             order = order_detail(inst, cl_ord_id=cl_id)
         except Exception as e:
