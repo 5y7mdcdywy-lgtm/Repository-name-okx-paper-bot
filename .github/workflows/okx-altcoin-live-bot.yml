@@ -1,0 +1,49 @@
+name: OKX Altcoin Scalper (5x)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "1-59/5 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: okx-altcoin-scalper
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run independent altcoin bot
+        env:
+          OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
+          OKX_API_SECRET: ${{ secrets.OKX_API_SECRET }}
+          OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
+          ALTCOIN_LIVE_TRADING: ${{ secrets.ALTCOIN_LIVE_TRADING }}
+          CONFIRM_ALTCOIN_5X_LIVE: ${{ secrets.CONFIRM_ALTCOIN_5X_LIVE }}
+        run: |
+          set +e
+          python altcoin_bot.py
+          BOT_EXIT=$?
+          set -e
+          if [ -f altcoin_swap_state.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+users.noreply.github.com"
+            git add altcoin_swap_state.json
+            if ! git diff --cached --quiet; then
+              git commit -m "Save altcoin bot state"
+              git push origin HEAD:main
+            fi
+          fi
+          exit "$BOT_EXIT"
