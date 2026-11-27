@@ -679,9 +679,50 @@ def run_once():
             print(inst, "暂无信号")
 
 
+def preflight():
+    """只读预检：仅调用GET接口，不读写状态、不设置杠杆、不下单。"""
+    print("开始只读预检：不会下单、平仓或修改账户设置。")
+    if KEY and SECRET and PASSPHRASE:
+        rows = get("/api/v5/account/config")
+        if not rows:
+            raise RuntimeError("账户配置读取失败")
+        mode = rows[0].get("posMode", "unknown")
+        print("OKX私有只读连接成功；持仓模式：", mode)
+        if mode != "long_short_mode":
+            print("注意：当前不是双向持仓模式；实盘前必须先人工确认，机器人不会修改账户。")
+    else:
+        print("未配置完整API凭据：跳过账户连接检查，只检查公开行情。")
+
+    failures = []
+    for inst in SYMBOLS:
+        try:
+            info = instrument(inst)
+            px = price(inst)
+            size = size_for(info, px)
+            five = candles(inst, "5m", 100)
+            fifteen = candles(inst, "15m", 60)
+            print(
+                "预检通过：", inst,
+                "| 最新价：", px,
+                "| 预计合约张数：", size,
+                "| 5m已完成K线：", len(five),
+                "| 15m已完成K线：", len(fifteen),
+                "| 最小张数：", info.get("minSz"),
+                "| 张数步进：", info.get("lotSz"),
+            )
+        except Exception as e:
+            failures.append((inst, str(e)))
+            print("预检失败：", inst, str(e))
+
+    if failures:
+        raise RuntimeError("只读预检未全部通过；失败币种数：" + str(len(failures)))
+    print("只读预检全部通过。仍未启用实盘，也没有发送任何交易订单。")
+
+
 def main():
     if not LIVE or CONFIRM != "YES":
-        print("山寨币机器人已安装；实盘开关未启用，本轮不连接账户、不下单。")
+        preflight()
+        print("实盘开关未启用；本轮只读检查结束，不会交易。")
         return
     if not KEY or not SECRET or not PASSPHRASE:
         raise RuntimeError("实盘开关已启用，但缺少OKX API凭据")
