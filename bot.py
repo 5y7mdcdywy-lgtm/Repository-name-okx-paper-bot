@@ -49,8 +49,9 @@ def request(method, path, params=None, body=None, private=False):
     body_text = json.dumps(body, separators=(",", ":"), ensure_ascii=False) if body is not None else ""
         headers = {
         "Content-Type": "application/json",
-        "User-Agent": "Python/3.11"
-    }
+        headers = {
+    "Content-Type": "application/json"
+}
 
     if private:
         message_time = timestamp()
