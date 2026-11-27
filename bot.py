@@ -728,6 +728,7 @@ def main():
                     )
 
                 params["after"] = cursor
+                time.sleep(0.25)
             else:
                 raise RuntimeError(
                     "成交记录超过10000条，未能完整核对，保持锁定"
