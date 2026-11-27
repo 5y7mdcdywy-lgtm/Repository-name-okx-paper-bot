@@ -1,4 +1,4 @@
-import os
+.import os
 import json
 import time
 import hmac
@@ -689,10 +689,16 @@ def main():
             raise RuntimeError("旧订单仍在交易所挂单，停止运行")
 
         # 查询交易所最近历史订单
-        history = get(
-            "/api/v5/trade/orders-history",
-            {"instType": "SWAP", "instId": inst, "limit": "100"}
-        )
+        try:
+    order = order_detail(inst, cl_ord_id=cl_id)
+except Exception as e:
+    raise RuntimeError(
+        "旧订单详情无法核实，禁止清除状态：" + str(e)
+    )
+
+state = order.get("state")
+if state not in ("filled", "canceled", "mmp_canceled"):
+    raise RuntimeError("旧订单尚未确认结束：" + str(state))
 
         matched = [x for x in history if x.get("clOrdId") == cl_id]
 
