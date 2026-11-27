@@ -688,15 +688,27 @@ def main():
         if any(x.get("clOrdId") == cl_id for x in open_orders):
             raise RuntimeError("旧订单仍在交易所挂单，停止运行")
 
-        # 按订单编号查询交易所订单详情
-        try:
-            order = order_detail(inst, cl_ord_id=cl_id)
-        except Exception as e:
+                # 查询最近三个月的已完成订单归档
+        history = get(
+            "/api/v5/trade/orders-history-archive",
+            {"instType": "SWAP", "instId": inst}
+        )
+
+        matched = [
+            x for x in history
+            if x.get("clOrdId") == cl_id
+        ]
+
+        if not matched:
             raise RuntimeError(
-                "旧订单详情无法核实，禁止清除状态：" + str(e)
+                "归档也找不到旧订单，继续锁定，禁止清除pending"
             )
 
+        order = matched[0]
         state = order.get("state")
+
+        if state not in ("filled", "canceled", "mmp_canceled"):
+            raise RuntimeError("旧订单状态未确认结束：" + str(state))
 
 
 
