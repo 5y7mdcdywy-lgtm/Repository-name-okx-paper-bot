@@ -699,9 +699,28 @@ def main():
             if x.get("clOrdId") == cl_id
         ]
 
-        if not matched:
+                if not matched:
+            fills = get(
+                "/api/v5/trade/fills-history",
+                {
+                    "instType": "SWAP",
+                    "instId": inst,
+                    "limit": "100"
+                }
+            )
+
+            fill_matches = [
+                x for x in fills
+                if x.get("clOrdId") == cl_id
+            ]
+
+            if fill_matches:
+                print("找到旧订单成交记录：", fill_matches)
+            else:
+                print("最近返回的成交记录中没有找到该订单编号")
+
             raise RuntimeError(
-                "归档也找不到旧订单，继续锁定，禁止清除pending"
+                "旧订单仍未完全核实，保持锁定，禁止清除pending"
             )
 
         order = matched[0]
