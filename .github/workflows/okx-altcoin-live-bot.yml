@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: okx-altcoin-scalper
+  group: okx-bots-shared-repo
   cancel-in-progress: false
 
 jobs:
