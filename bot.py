@@ -183,25 +183,39 @@ def positions(inst):
 def set_leverage(inst):
     for side in ("long", "short"):
         rows = post("/api/v5/account/set-leverage", {
-            "instId": inst, "lever": str(LEVERAGE),
-            "mgnMode": "isolated", "posSide": side,
+            "instId": inst,
+            "lever": str(LEVERAGE),
+            "mgnMode": "isolated",
+            "posSide": side,
         })
-        if not rows or rows[0].get("sCode") != "0":
-            raise RuntimeError(f"{inst} {side}设置杠杆失败: {rows}")
-    # 回读交易所实际配置，不以设置请求成功代替核验
+
+        if (
+            not rows
+            or rows[0].get("instId") != inst
+            or rows[0].get("posSide") != side
+            or rows[0].get("mgnMode") != "isolated"
+            or D(rows[0].get("lever", "0")) != LEVERAGE
+        ):
+            raise RuntimeError(
+                f"{inst} {side}杠杆设置响应异常: {rows}"
+            )
+
     rows = get("/api/v5/account/leverage-info", {
-        "instId": inst, "mgnMode": "isolated"
+        "instId": inst,
+        "mgnMode": "isolated"
     })
-    matched = [
-        x for x in rows
-        if x.get("posSide") in ("long", "short")
-    ]
-    if len(matched) < 2 or any(D(x.get("lever", "0")) != LEVERAGE for x in matched):
-        raise RuntimeError(f"{inst}杠杆回读与设定的{LEVERAGE}倍不一致: {rows}")
 
+    actual = {
+        x.get("posSide"): D(x.get("lever", "0"))
+        for x in rows
+    }
 
-# ================= 合约信息 =================
-def instrument(inst):
+    if actual.get("long") != LEVERAGE or actual.get("short") != LEVERAGE:
+        raise RuntimeError(
+            f"{inst}杠杆回读不一致: {rows}"
+        )
+
+    print(inst, "双向逐仓10倍杠杆核验通过")
     rows = get("/api/v5/public/instruments", {
         "instType": "SWAP", "instId": inst
     }, private=False)
