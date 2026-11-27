@@ -191,41 +191,22 @@ def positions(inst):
 
 
 def set_leverage(inst):
-    for side in ("long", "short"):
-        rows = post("/api/v5/account/set-leverage", {
-            "instId": inst,
-            "lever": str(LEVERAGE),
-            "mgnMode": "isolated",
-            "posSide": side,
-        })
-
-        if (
-            not rows
-            or rows[0].get("instId") != inst
-            or rows[0].get("posSide") != side
-            or rows[0].get("mgnMode") != "isolated"
-            or D(rows[0].get("lever", "0")) != LEVERAGE
-        ):
-            raise RuntimeError(
-                f"{inst} {side}杠杆设置响应异常: {rows}"
-            )
-
+    """只读核验逐仓杠杆；绝不自动修改OKX账户设置。"""
     rows = get("/api/v5/account/leverage-info", {
         "instId": inst,
         "mgnMode": "isolated"
     })
-
     actual = {
         x.get("posSide"): D(x.get("lever", "0"))
         for x in rows
     }
-
     if actual.get("long") != LEVERAGE or actual.get("short") != LEVERAGE:
         raise RuntimeError(
-            f"{inst}杠杆回读不一致: {rows}"
+            f"{inst}当前双向逐仓杠杆不是5倍；机器人不会自动修改账户。"
+            f"请先在OKX手动核对并设置后再运行。回读：{rows}"
         )
+    print(inst, "双向逐仓5倍杠杆只读核验通过")
 
-    print(inst, "双向逐仓5倍杠杆核验通过")
 def instrument(inst):
     rows = get("/api/v5/public/instruments", {
         "instType": "SWAP", "instId": inst
