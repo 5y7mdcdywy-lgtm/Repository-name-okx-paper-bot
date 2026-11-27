@@ -680,10 +680,11 @@ def run_once():
 
 
 def main():
-    if not KEY or not SECRET or not PASSPHRASE:
-        raise RuntimeError("缺少OKX API凭据")
     if not LIVE or CONFIRM != "YES":
-        raise RuntimeError("实盘开关未确认；当前程序不会下单。")
+        print("山寨币机器人已安装；实盘开关未启用，本轮不连接账户、不下单。")
+        return
+    if not KEY or not SECRET or not PASSPHRASE:
+        raise RuntimeError("实盘开关已启用，但缺少OKX API凭据")
 
     print("OKX山寨币超短线策略启动（5倍逐仓）")
     check_account()
