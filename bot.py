@@ -12,8 +12,8 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
-# ===== OKX 双向持仓策略 =====
-BASE = "https://openapi.okx.com"
+# ================= 配置 =================
+BASE = os.getenv("OKX_BASE_URL", "https://openapi.okx.com").rstrip("/")
 SYMBOLS = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
 
 LEVERAGE = Decimal("10")
@@ -22,32 +22,34 @@ TAKE_PROFIT = Decimal("0.06")
 STOP_LOSS = Decimal("0.03")
 
 STATE_FILE = "swap_state.json"
-LIVE = os.getenv("LIVE_TRADING", "false").strip().lower() == "true"
+HTTP_TIMEOUT = 20
+POLL_TRIES = 15
+POLL_SECONDS = 2
+
+LIVE = os.getenv("LIVE_TRADING", "false").lower() == "true"
 CONFIRM = os.getenv("CONFIRM_10X_LIVE", "").strip()
 
 KEY = os.getenv("OKX_API_KEY", "").strip()
 SECRET = os.getenv("OKX_API_SECRET", "").strip()
 PASSPHRASE = os.getenv("OKX_PASSPHRASE", "").strip()
 
-HTTP_TIMEOUT = 20
-WAIT_TRIES = 10
-WAIT_SECONDS = 2
+
+# ================= 基础工具 =================
+def D(x):
+    return Decimal(str(x))
 
 
-def dec(value):
-    return Decimal(str(value))
-
-
-def timestamp():
+def now():
     return datetime.now(timezone.utc).isoformat(
         timespec="milliseconds"
     ).replace("+00:00", "Z")
 
 
-def request(method, path, params=None, body=None, private=False):
+def api(method, path, params=None, body=None, private=False):
     method = method.upper()
-    query = "?" + urllib.parse.urlencode(params) if params else ""
-    request_path = path + query
+    query = urllib.parse.urlencode(params or {})
+    request_path = path + (("?" + query) if query else "")
+
     body_text = (
         json.dumps(body, separators=(",", ":"), ensure_ascii=False)
         if body is not None else ""
@@ -55,24 +57,27 @@ def request(method, path, params=None, body=None, private=False):
 
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "OKXTradingBot/2.0"
+        "User-Agent": "OKX-Swap-Bot/3.0",
     }
 
     if private:
-        now = timestamp()
-        message = now + method + request_path + body_text
-        signature = base64.b64encode(
+        if not KEY or not SECRET or not PASSPHRASE:
+            raise RuntimeError("API密钥不完整")
+
+        ts = now()
+        sign_text = ts + method + request_path + body_text
+        sign = base64.b64encode(
             hmac.new(
                 SECRET.encode(),
-                message.encode(),
+                sign_text.encode(),
                 hashlib.sha256
             ).digest()
         ).decode()
 
         headers.update({
             "OK-ACCESS-KEY": KEY,
-            "OK-ACCESS-SIGN": signature,
-            "OK-ACCESS-TIMESTAMP": now,
+            "OK-ACCESS-SIGN": sign,
+            "OK-ACCESS-TIMESTAMP": ts,
             "OK-ACCESS-PASSPHRASE": PASSPHRASE,
         })
 
@@ -84,203 +89,211 @@ def request(method, path, params=None, body=None, private=False):
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as response:
-            payload = response.read().decode()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="replace")[:500]
-        raise RuntimeError(f"OKX HTTP错误 {exc.code}: {detail}") from None
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"连接 OKX 失败: {exc.reason}") from None
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as res:
+            raw = res.read().decode()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:600]
+        raise RuntimeError(f"HTTP {e.code}: {detail}") from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"网络连接失败: {e.reason}") from None
 
     try:
-        result = json.loads(payload)
-    except json.JSONDecodeError:
-        raise RuntimeError("OKX 返回数据无法解析") from None
+        result = json.loads(raw)
+    except Exception:
+        raise RuntimeError("OKX返回内容不是有效JSON") from None
 
     if result.get("code") != "0":
         raise RuntimeError(
-            f"OKX API错误: {result.get('code')} {result.get('msg')}"
+            f"OKX错误 {result.get('code')}: {result.get('msg')}"
         )
 
     return result.get("data", [])
 
 
-def private_get(path, params=None):
-    return request("GET", path, params=params, private=True)
+def get(path, params=None, private=True):
+    return api("GET", path, params=params, private=private)
 
 
-def private_post(path, body):
-    return request("POST", path, body=body, private=True)
+def post(path, body):
+    return api("POST", path, body=body, private=True)
 
 
-def public_get(path, params=None):
-    return request("GET", path, params=params)
-
-
+# ================= 状态文件 =================
 def load_state():
     if not os.path.exists(STATE_FILE):
-        return {"positions": {}, "pending": None}
+        return {"positions": {}, "pending": None, "halted": False}
 
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            state = json.load(f)
-    except Exception as exc:
-        raise RuntimeError(f"状态文件读取失败，停止交易: {exc}") from None
+            s = json.load(f)
+    except Exception as e:
+        raise RuntimeError(f"状态文件损坏，停止交易: {e}") from None
 
-    if not isinstance(state, dict):
+    if not isinstance(s, dict):
         raise RuntimeError("状态文件格式错误")
 
-    positions = state.get("positions", {})
+    if s.get("halted"):
+        raise RuntimeError(
+            "机器人处于故障锁定状态。必须先人工核对OKX持仓和委托。"
+        )
+
+    positions = s.get("positions", {})
     if not isinstance(positions, dict):
-        raise RuntimeError("positions 状态格式错误")
+        raise RuntimeError("持仓状态格式错误")
 
-    # 旧版按 instId 保存，不能直接用于双向模式
-    for key, value in positions.items():
+    for key in positions:
         if ":" not in key:
-            raise RuntimeError(
-                "发现旧版单向持仓状态记录。请先核对 OKX 所有仓位及订单，"
-                "不能自动迁移或删除旧记录。"
-            )
+            raise RuntimeError("发现旧版持仓记录，拒绝自动迁移")
 
-    state.setdefault("positions", {})
-    state.setdefault("pending", None)
-    return state
+    s.setdefault("positions", {})
+    s.setdefault("pending", None)
+    s.setdefault("halted", False)
+    return s
 
 
-def save_state(state):
+def save_state(s):
     temp = STATE_FILE + ".tmp"
     with open(temp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
+        json.dump(s, f, indent=2, ensure_ascii=False)
         f.write("\n")
     os.replace(temp, STATE_FILE)
 
 
-def position_key(inst_id, pos_side):
-    return inst_id + ":" + pos_side
+def halt(reason):
+    s = {
+        "positions": {},
+        "pending": {"reason": reason, "time": now()},
+        "halted": True,
+    }
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                old = json.load(f)
+            if isinstance(old, dict):
+                s["positions"] = old.get("positions", {})
+        except Exception:
+            pass
+    save_state(s)
+    raise RuntimeError("交易锁定: " + reason)
 
 
+def key_for(inst, side):
+    return inst + ":" + side
+
+
+# ================= 账户及持仓 =================
 def check_account():
-    rows = private_get("/api/v5/account/config")
+    rows = get("/api/v5/account/config")
     if not rows or rows[0].get("posMode") != "long_short_mode":
-        raise RuntimeError(
-            "OKX账户必须为双向持仓模式(long_short_mode)，"
-            "当前模式不符合要求，停止交易。"
-        )
+        raise RuntimeError("账户必须为双向持仓模式 long_short_mode")
 
 
-def get_positions(inst_id):
-    rows = private_get(
+def positions(inst):
+    rows = get(
         "/api/v5/account/positions",
-        {"instId": inst_id}
+        {"instId": inst}
     )
     result = {}
-
-    for row in rows:
-        size = dec(row.get("pos", "0"))
-        side = row.get("posSide", "")
-
+    for p in rows:
+        size = D(p.get("pos", "0"))
+        side = p.get("posSide")
         if size == 0:
             continue
-
         if side not in ("long", "short"):
-            raise RuntimeError(
-                f"{inst_id} 返回了无法识别的持仓方向，停止操作"
-            )
-
-        result[side] = row
-
+            raise RuntimeError(f"{inst}持仓方向无法识别")
+        result[side] = p
     return result
 
 
-def set_leverage(inst_id):
+def set_leverage(inst):
     for side in ("long", "short"):
-        private_post("/api/v5/account/set-leverage", {
-            "instId": inst_id,
+        rows = post("/api/v5/account/set-leverage", {
+            "instId": inst,
             "lever": str(LEVERAGE),
             "mgnMode": "isolated",
             "posSide": side,
         })
+        if not rows:
+            raise RuntimeError(f"{inst}设置杠杆未返回结果")
 
 
-def get_instrument(inst_id):
-    rows = public_get("/api/v5/public/instruments", {
-        "instType": "SWAP",
-        "instId": inst_id,
-    })
-
-    if not rows:
-        raise RuntimeError(f"找不到合约: {inst_id}")
-
-    info = rows[0]
-
-    if info.get("state") != "live":
-        raise RuntimeError(f"{inst_id} 当前不可交易")
-
-    if (
-        info.get("ctType") != "linear"
-        or info.get("settleCcy") != "USDT"
-    ):
-        raise RuntimeError(f"{inst_id} 不是 USDT 线性永续合约")
-
-    if info.get("ctValCcy") != inst_id.split("-")[0]:
-        raise RuntimeError(f"{inst_id} 合约面值币种异常")
-
-    return info
-
-
-def get_price(inst_id):
-    rows = public_get("/api/v5/market/ticker", {
-        "instId": inst_id
-    })
-
-    if not rows or not rows[0].get("last"):
-        raise RuntimeError(f"无法获取 {inst_id} 最新价格")
-
-    return dec(rows[0]["last"])
-
-
-def round_step(value, step, rounding=ROUND_DOWN):
-    return (
-        (value / step).to_integral_value(rounding=rounding)
-        * step
+# ================= 合约信息 =================
+def instrument(inst):
+    rows = get(
+        "/api/v5/public/instruments",
+        {"instType": "SWAP", "instId": inst},
+        private=False,
     )
+    if not rows:
+        raise RuntimeError(f"找不到合约 {inst}")
+
+    x = rows[0]
+    if x.get("state") != "live":
+        raise RuntimeError(f"{inst}当前不可交易")
+    if x.get("settleCcy") != "USDT":
+        raise RuntimeError(f"{inst}不是USDT结算合约")
+
+    return x
 
 
-def contract_size(info, price):
-    ct_val = dec(info["ctVal"])
-    ct_mult = dec(info.get("ctMult") or "1")
-    lot = dec(info["lotSz"])
-    minimum = dec(info["minSz"])
+def price(inst):
+    rows = get(
+        "/api/v5/market/ticker",
+        {"instId": inst},
+        private=False,
+    )
+    if not rows or not rows[0].get("last"):
+        raise RuntimeError(f"{inst}行情获取失败")
+    return D(rows[0]["last"])
 
-    if price <= 0 or ct_val <= 0 or ct_mult <= 0 or lot <= 0:
-        raise RuntimeError("合约参数异常，拒绝下单")
 
-    one_contract = ct_val * ct_mult * price
-    target_notional = MARGIN_USDT * LEVERAGE
-    size = round_step(target_notional / one_contract, lot)
+def round_step(v, step, mode=ROUND_DOWN):
+    return (v / step).to_integral_value(rounding=mode) * step
+
+
+def size_for(info, px):
+    ct_val = D(info["ctVal"])
+    ct_mult = D(info.get("ctMult") or "1")
+    lot = D(info["lotSz"])
+    minimum = D(info["minSz"])
+
+    if min(ct_val, ct_mult, lot, px) <= 0:
+        raise RuntimeError("合约参数异常")
+
+    notional = MARGIN_USDT * LEVERAGE
+    size = round_step(notional / (ct_val * ct_mult * px), lot)
 
     if size < minimum:
         raise RuntimeError(
-            "5 USDT保证金预算不足以满足最小下单张数，拒绝放大仓位"
+            "每币5 USDT预算不足以满足最小下单量，拒绝扩大仓位"
         )
 
     max_size = info.get("maxMktSz")
-    if max_size and size > dec(max_size):
-        raise RuntimeError("计算张数超过交易所市价单上限")
+    if max_size and size > D(max_size):
+        raise RuntimeError("下单数量超过交易所市价单上限")
 
     return size
+
+
+# ================= 信号 =================
+def candles(inst, bar, limit):
+    rows = get(
+        "/api/v5/market/candles",
+        {"instId": inst, "bar": bar, "limit": str(limit)},
+        private=False,
+    )
+    rows = [r for r in rows if len(r) > 8 and r[8] == "1"]
+    rows.reverse()
+    return [D(r[4]) for r in rows]
 
 
 def ema(values, period):
     if len(values) < period:
         raise RuntimeError("EMA数据不足")
-
-    alpha = Decimal("2") / Decimal(period + 1)
-    result = sum(values[:period]) / Decimal(period)
-
-    for value in values[period:]:
-        result = value * alpha + result * (Decimal("1") - alpha)
-
+    alpha = D(2) / D(period + 1)
+    result = sum(values[:period]) / D(period)
+    for v in values[period:]:
+        result = v * alpha + result * (D(1) - alpha)
     return result
 
 
@@ -288,355 +301,435 @@ def rsi(values, period=14):
     if len(values) < period + 1:
         raise RuntimeError("RSI数据不足")
 
-    gains = []
-    losses = []
+    changes = [values[i] - values[i - 1] for i in range(1, len(values))]
+    gains = [max(x, D(0)) for x in changes]
+    losses = [max(-x, D(0)) for x in changes]
 
-    for i in range(1, len(values)):
-        change = values[i] - values[i - 1]
-        gains.append(max(change, Decimal("0")))
-        losses.append(max(-change, Decimal("0")))
+    ag = sum(gains[:period]) / D(period)
+    al = sum(losses[:period]) / D(period)
 
-    avg_gain = sum(gains[:period]) / Decimal(period)
-    avg_loss = sum(losses[:period]) / Decimal(period)
+    for i in range(period, len(changes)):
+        ag = (ag * D(period - 1) + gains[i]) / D(period)
+        al = (al * D(period - 1) + losses[i]) / D(period)
 
-    for i in range(period, len(gains)):
-        avg_gain = (
-            avg_gain * Decimal(period - 1) + gains[i]
-        ) / Decimal(period)
-        avg_loss = (
-            avg_loss * Decimal(period - 1) + losses[i]
-        ) / Decimal(period)
-
-    if avg_loss == 0:
-        return Decimal("100")
-
-    rs = avg_gain / avg_loss
-    return Decimal("100") - (
-        Decimal("100") / (Decimal("1") + rs)
-    )
+    if al == 0:
+        return D(100)
+    return D(100) - D(100) / (D(1) + ag / al)
 
 
-def closed_closes(inst_id, bar, limit):
-    rows = public_get("/api/v5/market/candles", {
-        "instId": inst_id,
-        "bar": bar,
-        "limit": str(limit),
-    })
-
-    # OKX confirm=1 表示K线已收盘
-    rows = [row for row in rows if row[8] == "1"]
-    rows.reverse()
-
-    return [dec(row[4]) for row in rows]
-
-
-def get_signal(inst_id):
-    five = closed_closes(inst_id, "5m", 100)
-    fifteen = closed_closes(inst_id, "15m", 60)
+def signal(inst):
+    five = candles(inst, "5m", 100)
+    fifteen = candles(inst, "15m", 60)
 
     if len(five) < 40 or len(fifteen) < 25:
-        print(f"{inst_id} K线数据不足，暂不交易")
+        print(inst, "K线不足")
         return None
 
-    fast = ema(five, 5)
-    slow = ema(five, 13)
-    momentum = rsi(five, 14)
-
-    trend = ema(fifteen, 20)
-    trend_price = fifteen[-1]
-    current_price = five[-1]
+    e5 = ema(five, 5)
+    e13 = ema(five, 13)
+    r = rsi(five, 14)
+    e20 = ema(fifteen, 20)
 
     print(
-        f"{inst_id} 5m EMA5={fast:.6f} "
-        f"EMA13={slow:.6f} RSI={momentum:.2f}"
+        inst,
+        "EMA5", e5,
+        "EMA13", e13,
+        "RSI", r,
+        "15m EMA20", e20,
     )
 
-    # 放宽入场条件，提高信号出现机会；不强制开仓
-    if (
-        fast > slow
-        and current_price > slow
-        and trend_price > trend
-        and momentum >= Decimal("52")
-    ):
+    if e5 > e13 and five[-1] > e13 and fifteen[-1] > e20 and r >= 52:
         return "long"
 
-    if (
-        fast < slow
-        and current_price < slow
-        and trend_price < trend
-        and momentum <= Decimal("48")
-    ):
+    if e5 < e13 and five[-1] < e13 and fifteen[-1] < e20 and r <= 48:
         return "short"
 
     return None
 
 
-def confirm_order(result, name):
-    if (
-        not result
-        or result[0].get("sCode") != "0"
-        or not result[0].get("ordId")
-    ):
-        raise RuntimeError(f"{name}未获交易所确认: {result}")
+# ================= 订单查询 =================
+def order_detail(inst, ord_id):
+    rows = get(
+        "/api/v5/trade/order",
+        {"instId": inst, "ordId": ord_id},
+    )
+    if not rows:
+        raise RuntimeError("无法查询开仓订单详情")
+    return rows[0]
 
 
-def wait_for_position(inst_id, side):
-    for _ in range(WAIT_TRIES):
-        time.sleep(WAIT_SECONDS)
-        positions = get_positions(inst_id)
-        if side in positions:
-            return positions[side]
+def algo_detail(algo_id):
+    rows = get(
+        "/api/v5/trade/order-algo",
+        {"algoId": algo_id},
+    )
+    if not rows:
+        raise RuntimeError("无法查询止盈止损策略委托详情")
+    return rows[0]
 
+
+def wait_order(inst, ord_id):
+    for _ in range(POLL_TRIES):
+        x = order_detail(inst, ord_id)
+        if x.get("state") == "filled":
+            return x
+        if x.get("state") in ("canceled", "mmp_canceled"):
+            raise RuntimeError("开仓订单已取消")
+        time.sleep(POLL_SECONDS)
+    raise RuntimeError("开仓订单未能确认完全成交")
+
+
+def wait_position(inst, side):
+    for _ in range(POLL_TRIES):
+        p = positions(inst)
+        if side in p:
+            return p[side]
+        time.sleep(POLL_SECONDS)
     return None
 
 
-def place_entry(inst_id, direction, info):
-    positions = get_positions(inst_id)
+# ================= 保护单核实及修正 =================
+def verify_and_fix_protection(inst, side, ord_id, avg_px, tick):
+    detail = order_detail(inst, ord_id)
+    attached = detail.get("attachAlgoOrds") or []
 
-    if direction in positions:
-        raise RuntimeError(
-            f"{inst_id} 已有 {direction} 仓位，拒绝重复开仓"
-        )
+    algo_ids = [
+        a.get("attachAlgoId")
+        for a in attached
+        if a.get("attachAlgoId")
+    ]
 
-    price = get_price(inst_id)
-    size = contract_size(info, price)
-    tick = dec(info["tickSz"])
+    if not algo_ids:
+        raise RuntimeError("主订单没有返回附带止盈止损ID")
 
-    if direction == "long":
-        order_side = "buy"
-        tp = round_step(
-            price * (Decimal("1") + TAKE_PROFIT),
-            tick,
-            ROUND_UP
-        )
-        sl = round_step(
-            price * (Decimal("1") - STOP_LOSS),
-            tick,
-            ROUND_DOWN
-        )
-    else:
-        order_side = "sell"
-        tp = round_step(
-            price * (Decimal("1") - TAKE_PROFIT),
-            tick,
-            ROUND_DOWN
-        )
-        sl = round_step(
-            price * (Decimal("1") + STOP_LOSS),
-            tick,
-            ROUND_UP
-        )
-
-    state = load_state()
-    if state.get("pending"):
-        raise RuntimeError("存在未处理订单，停止开仓")
-
-    client_id = uuid.uuid4().hex[:24]
-
-    state["pending"] = {
-        "instId": inst_id,
-        "posSide": direction,
-        "action": "entry",
-        "clOrdId": client_id,
-        "createdAt": timestamp(),
-    }
-    save_state(state)
-
-    result = private_post("/api/v5/trade/order", {
-        "instId": inst_id,
-        "tdMode": "isolated",
-        "posSide": direction,
-        "clOrdId": client_id,
-        "side": order_side,
-        "ordType": "market",
-        "sz": str(size),
-        "attachAlgoOrds": [{
-            "tpTriggerPx": str(tp),
-            "tpOrdPx": "-1",
-            "tpTriggerPxType": "mark",
-            "slTriggerPx": str(sl),
-            "slOrdPx": "-1",
-            "slTriggerPxType": "mark",
-        }],
-    })
-
-    confirm_order(result, "开仓订单")
-
-    position = wait_for_position(inst_id, direction)
-
-    if not position:
-        raise RuntimeError(
-            "开仓请求已接受，但尚未检测到持仓。"
-            "pending 已保留，请检查 OKX 订单和持仓，勿直接清除状态。"
-        )
-
-    state = load_state()
-    state["pending"] = None
-    state["positions"][position_key(inst_id, direction)] = {
-        "size": str(abs(dec(position["pos"]))),
-        "clOrdId": client_id,
-        "recordedAt": timestamp(),
-    }
-    save_state(state)
-
-    print(f"开仓确认: {inst_id} {direction}")
-    print(f"实际仓位: {position['pos']} 张")
-    print(f"止盈触发价估算: {tp}")
-    print(f"止损触发价估算: {sl}")
-    print("保护单触发价按下单前行情估算，并非实际成交均价。")
-
-
-def close_position(inst_id, direction, position):
-    size = abs(dec(position["pos"]))
-
-    if direction == "long":
-        order_side = "sell"
-    else:
-        order_side = "buy"
-
-    state = load_state()
-    if state.get("pending"):
-        raise RuntimeError("存在未处理订单，停止平仓")
-
-    client_id = uuid.uuid4().hex[:24]
-
-    state["pending"] = {
-        "instId": inst_id,
-        "posSide": direction,
-        "action": "close",
-        "clOrdId": client_id,
-        "createdAt": timestamp(),
-    }
-    save_state(state)
-
-    result = private_post("/api/v5/trade/order", {
-        "instId": inst_id,
-        "tdMode": "isolated",
-        "posSide": direction,
-        "clOrdId": client_id,
-        "side": order_side,
-        "ordType": "market",
-        "sz": str(size),
-    })
-
-    confirm_order(result, "平仓订单")
-
-    for _ in range(WAIT_TRIES):
-        time.sleep(WAIT_SECONDS)
-        positions = get_positions(inst_id)
-
-        if direction not in positions:
-            state = load_state()
-            state["positions"].pop(
-                position_key(inst_id, direction),
-                None
-            )
-            state["pending"] = None
-            save_state(state)
-            print(f"平仓确认: {inst_id} {direction}")
-            return
-
-    raise RuntimeError(
-        "平仓请求已接受但仓位仍存在，pending 已保留，请检查 OKX。"
+    expected_tp = (
+        avg_px * (D(1) + TAKE_PROFIT)
+        if side == "long"
+        else avg_px * (D(1) - TAKE_PROFIT)
+    )
+    expected_sl = (
+        avg_px * (D(1) - STOP_LOSS)
+        if side == "long"
+        else avg_px * (D(1) + STOP_LOSS)
     )
 
+    expected_tp = round_step(
+        expected_tp, tick,
+        ROUND_UP if side == "long" else ROUND_DOWN
+    )
+    expected_sl = round_step(
+        expected_sl, tick,
+        ROUND_DOWN if side == "long" else ROUND_UP
+    )
 
-def run_once():
-    state = load_state()
+    verified = False
 
-    if state.get("pending"):
+    for algo_id in algo_ids:
+        a = algo_detail(algo_id)
+
+        if a.get("state") not in ("live", "effective", "partially_effective"):
+            continue
+
+        tp = D(a.get("tpTriggerPx") or "0")
+        sl = D(a.get("slTriggerPx") or "0")
+
+        if tp > 0 and sl > 0:
+            # 以实际成交均价为基准，修正保护价格
+            if tp != expected_tp or sl != expected_sl:
+                changed = post("/api/v5/trade/amend-algos", {
+                    "instId": inst,
+                    "algoId": algo_id,
+                    "newTpTriggerPx": str(expected_tp),
+                    "newTpOrdPx": "-1",
+                    "newTpTriggerPxType": "mark",
+                    "newSlTriggerPx": str(expected_sl),
+                    "newSlOrdPx": "-1",
+                    "newSlTriggerPxType": "mark",
+                })
+
+                if not changed or changed[0].get("sCode") != "0":
+                    raise RuntimeError("修正止盈止损价格失败")
+
+                time.sleep(1)
+                a = algo_detail(algo_id)
+
+            if (
+                a.get("state") in ("live", "effective", "partially_effective")
+                and D(a.get("tpTriggerPx") or "0") == expected_tp
+                and D(a.get("slTriggerPx") or "0") == expected_sl
+            ):
+                verified = True
+                print("保护单确认:", algo_id)
+                print("实际均价:", avg_px)
+                print("止盈价:", expected_tp)
+                print("止损价:", expected_sl)
+                break
+
+    if not verified:
+        raise RuntimeError("止盈止损未能核实，必须停止交易")
+
+    return {
+        "algoIds": algo_ids,
+        "avgPx": str(avg_px),
+        "tp": str(expected_tp),
+        "sl": str(expected_sl),
+    }
+
+
+# ================= 故障时尝试平仓 =================
+def emergency_close(inst, side):
+    p = positions(inst)
+    if side not in p:
+        print("故障时未发现对应持仓")
+        return
+
+    size = abs(D(p[side]["pos"]))
+    close_side = "sell" if side == "long" else "buy"
+
+    result = post("/api/v5/trade/order", {
+        "instId": inst,
+        "tdMode": "isolated",
+        "posSide": side,
+        "side": close_side,
+        "ordType": "market",
+        "sz": str(size),
+        "clOrdId": uuid.uuid4().hex[:24],
+    })
+
+    if not result or result[0].get("sCode") != "0":
         raise RuntimeError(
-            "发现上次未确认订单，交易锁定。"
-            "请先核对 OKX 订单和持仓，不要直接删除 pending。"
+            "紧急平仓请求未获确认，请立即在OKX手动检查持仓"
         )
+
+    print("已发送紧急平仓请求，请核对交易所持仓")
+
+
+# ================= 开仓 =================
+def enter(inst, side, info):
+    s = load_state()
+    if s.get("pending"):
+        raise RuntimeError("存在未处理订单，禁止开仓")
+
+    current = positions(inst)
+    if side in current:
+        print(inst, side, "已有仓位，跳过")
+        return
+
+    px = price(inst)
+    size = size_for(info, px)
+    tick = D(info["tickSz"])
+
+    client_id = uuid.uuid4().hex[:24]
+    algo_client_id = uuid.uuid4().hex[:24]
+
+    s["pending"] = {
+        "instId": inst,
+        "side": side,
+        "clOrdId": client_id,
+        "algoClOrdId": algo_client_id,
+        "time": now(),
+    }
+    save_state(s)
+
+    close_side = "buy" if side == "long" else "sell"
+
+    if side == "long":
+        tp = round_step(px * (D(1) + TAKE_PROFIT), tick, ROUND_UP)
+        sl = round_step(px * (D(1) - STOP_LOSS), tick, ROUND_DOWN)
+    else:
+        tp = round_step(px * (D(1) - TAKE_PROFIT), tick, ROUND_DOWN)
+        sl = round_step(px * (D(1) + STOP_LOSS), tick, ROUND_UP)
+
+    try:
+        result = post("/api/v5/trade/order", {
+            "instId": inst,
+            "tdMode": "isolated",
+            "posSide": side,
+            "side": close_side,
+            "ordType": "market",
+            "sz": str(size),
+            "clOrdId": client_id,
+            "attachAlgoOrds": [{
+                "attachAlgoClOrdId": algo_client_id,
+                "tpTriggerPx": str(tp),
+                "tpOrdPx": "-1",
+                "tpTriggerPxType": "mark",
+                "slTriggerPx": str(sl),
+                "slOrdPx": "-1",
+                "slTriggerPxType": "mark",
+            }],
+        })
+
+        if not result or result[0].get("sCode") != "0":
+            raise RuntimeError("开仓订单未获交易所确认")
+
+        ord_id = result[0].get("ordId")
+        if not ord_id:
+            raise RuntimeError("开仓订单缺少ordId")
+
+        filled = wait_order(inst, ord_id)
+        avg_px = D(filled.get("avgPx") or "0")
+        filled_size = D(filled.get("accFillSz") or "0")
+
+        if avg_px <= 0 or filled_size <= 0:
+            raise RuntimeError("成交均价或成交数量无效")
+
+        pos = wait_position(inst, side)
+        if not pos:
+            raise RuntimeError("订单成交后未检测到对应持仓")
+
+        protection = verify_and_fix_protection(
+            inst, side, ord_id, avg_px, tick
+        )
+
+        s = load_state()
+        s["positions"][key_for(inst, side)] = {
+            "ordId": ord_id,
+            "size": str(abs(D(pos["pos"]))),
+            "avgPx": str(avg_px),
+            "protection": protection,
+            "time": now(),
+        }
+        s["pending"] = None
+        save_state(s)
+
+        print("开仓及保护单核验完成:", inst, side)
+
+    except Exception as e:
+        print("开仓流程异常:", str(e))
+        try:
+            emergency_close(inst, side)
+        except Exception as close_error:
+            print("紧急平仓也未能确认:", close_error)
+
+        halt(
+            f"{inst} {side} 开仓或保护单验证失败。"
+            "已停止后续交易，必须人工核对OKX。"
+        )
+
+
+# ================= 平仓 =================
+def close_position(inst, side, pos):
+    s = load_state()
+    if s.get("pending"):
+        raise RuntimeError("存在未处理订单，禁止平仓操作")
+
+    size = abs(D(pos["pos"]))
+    close_side = "sell" if side == "long" else "buy"
+    client_id = uuid.uuid4().hex[:24]
+
+    s["pending"] = {
+        "instId": inst,
+        "side": side,
+        "action": "close",
+        "clOrdId": client_id,
+        "time": now(),
+    }
+    save_state(s)
+
+    result = post("/api/v5/trade/order", {
+        "instId": inst,
+        "tdMode": "isolated",
+        "posSide": side,
+        "side": close_side,
+        "ordType": "market",
+        "sz": str(size),
+        "clOrdId": client_id,
+    })
+
+    if not result or result[0].get("sCode") != "0":
+        halt(f"{inst} {side} 平仓订单未获确认")
+
+    for _ in range(POLL_TRIES):
+        time.sleep(POLL_SECONDS)
+        if side not in positions(inst):
+            s = load_state()
+            s["positions"].pop(key_for(inst, side), None)
+            s["pending"] = None
+            save_state(s)
+            print("平仓确认:", inst, side)
+            return
+
+    halt(f"{inst} {side} 平仓后仍有仓位，需人工检查")
+
+
+# ================= 主循环 =================
+def run_once():
+    s = load_state()
+    if s.get("pending"):
+        raise RuntimeError("上次执行留下未处理订单，停止运行")
 
     check_account()
 
-    # 先检查全部仓位。任何未登记仓位都停止，不自动接管。
-    for inst_id in SYMBOLS:
-        actual = get_positions(inst_id)
-
+    # 先核对所有实际仓位，禁止自动接管陌生仓位
+    for inst in SYMBOLS:
+        actual = positions(inst)
         for side in actual:
-            key = position_key(inst_id, side)
-            if key not in state["positions"]:
+            if key_for(inst, side) not in s["positions"]:
                 raise RuntimeError(
-                    f"{inst_id} 存在未登记的 {side} 仓位，停止交易"
+                    f"{inst}存在未登记的{side}仓位，停止交易"
                 )
 
-        for side in list(state["positions"]):
-            if side.startswith(inst_id + ":"):
-                pos_side = side.split(":")[-1]
-                if pos_side not in actual:
-                    state["positions"].pop(side, None)
-                    save_state(state)
-                    print(f"{inst_id} {pos_side} 仓位已不存在，清理本地记录")
+    for inst in SYMBOLS:
+        info = instrument(inst)
+        actual = positions(inst)
+        sig = signal(inst)
 
-    for inst_id in SYMBOLS:
-        info = get_instrument(inst_id)
-        positions = get_positions(inst_id)
-        signal = get_signal(inst_id)
-
-        # 反向信号先平仓，本轮不立即反手
         opposite = (
-            "short" if signal == "long"
-            else "long" if signal == "short"
+            "short" if sig == "long"
+            else "long" if sig == "short"
             else None
         )
 
-        if opposite and opposite in positions:
-            close_position(inst_id, opposite, positions[opposite])
+        if opposite and opposite in actual:
+            close_position(inst, opposite, actual[opposite])
             continue
 
-        if signal and signal in positions:
-            print(f"{inst_id} 已有 {signal} 仓位，继续持有")
+        if sig and sig in actual:
+            print(inst, sig, "已有仓位，不重复开仓")
             continue
 
-        if signal:
-            place_entry(inst_id, signal, info)
+        if sig:
+            enter(inst, sig, info)
         else:
-            print(f"{inst_id} 暂无开仓信号")
+            print(inst, "暂无信号")
 
 
 def main():
     if not KEY or not SECRET or not PASSPHRASE:
-        raise RuntimeError("缺少 OKX API 密钥配置")
+        raise RuntimeError("缺少OKX API凭据")
 
     if not LIVE or CONFIRM != "YES":
         raise RuntimeError(
-            "实盘开关未确认：需要 LIVE_TRADING=true "
-            "且 CONFIRM_10X_LIVE=YES"
+            "实盘开关未确认；当前程序不会下单。"
         )
 
-    print("OKX 双向持仓策略：本次执行一轮")
-    print("周期：5分钟信号 + 15分钟趋势过滤")
-    print("信号：EMA5/EMA13 + RSI")
-    print(f"杠杆：{LEVERAGE}x，逐仓")
-    print(f"每币保证金预算：{MARGIN_USDT} USDT")
-    print(f"止盈：{TAKE_PROFIT * 100}%")
-    print(f"止损：{STOP_LOSS * 100}%")
-    print(f"交易标的：{', '.join(SYMBOLS)}")
+    print("OKX双向永续策略启动")
+    print("标的:", SYMBOLS)
+    print("逐仓杠杆:", LEVERAGE)
+    print("每币保证金预算:", MARGIN_USDT)
+    print("止盈:", TAKE_PROFIT)
+    print("止损:", STOP_LOSS)
 
     check_account()
 
-    state = load_state()
-    if state.get("pending"):
-        raise RuntimeError("发现未处理订单，停止运行")
+    s = load_state()
+    if s.get("pending"):
+        raise RuntimeError("存在未完成订单，停止运行")
 
-    # 未登记仓位检查通过后才设置杠杆
-    for inst_id in SYMBOLS:
-        positions = get_positions(inst_id)
-        for side in positions:
-            key = position_key(inst_id, side)
-            if key not in state["positions"]:
+    for inst in SYMBOLS:
+        actual = positions(inst)
+        for side in actual:
+            if key_for(inst, side) not in s["positions"]:
                 raise RuntimeError(
-                    f"{inst_id} 有未登记的 {side} 仓位，停止操作"
+                    f"{inst}有未登记仓位，拒绝运行"
                 )
 
-    for inst_id in SYMBOLS:
-        set_leverage(inst_id)
+    for inst in SYMBOLS:
+        set_leverage(inst)
 
     run_once()
-    print("本轮执行结束")
+    print("本轮执行完成")
 
 
 if __name__ == "__main__":
