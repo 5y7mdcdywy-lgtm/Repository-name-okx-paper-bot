@@ -688,7 +688,7 @@ def main():
         if any(x.get("clOrdId") == cl_id for x in open_orders):
             raise RuntimeError("旧订单仍在交易所挂单，停止运行")
 
-                        # 查询最近三个月的已完成订单归档
+        # 查询最近三个月的已完成订单归档
         history = get(
             "/api/v5/trade/orders-history-archive",
             {"instType": "SWAP", "instId": inst}
@@ -722,40 +722,12 @@ def main():
             raise RuntimeError(
                 "旧订单仍未完全核实，保持锁定，禁止清除pending"
             )
-            fills = get(
-                "/api/v5/trade/fills-history",
-                {
-                    "instType": "SWAP",
-                    "instId": inst,
-                    "limit": "100"
-                }
-            )
-
-            fill_matches = [
-                x for x in fills
-                if x.get("clOrdId") == cl_id
-            ]
-
-            if fill_matches:
-                print("找到旧订单成交记录：", fill_matches)
-            else:
-                print("最近返回的成交记录中没有找到该订单编号")
-
-            raise RuntimeError(
-                "旧订单仍未完全核实，保持锁定，禁止清除pending"
-            )
 
         order = matched[0]
         state = order.get("state")
 
         if state not in ("filled", "canceled", "mmp_canceled"):
             raise RuntimeError("旧订单状态未确认结束：" + str(state))
-
-
-
-        if state not in ("filled", "canceled", "mmp_canceled"):
-            raise RuntimeError("旧订单状态未结束: " + str(state))
-
         # 核对 BTC、ETH 两个合约的实际持仓
         for symbol in SYMBOLS:
             actual = positions(symbol)
