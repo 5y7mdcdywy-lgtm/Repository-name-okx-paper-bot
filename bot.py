@@ -47,7 +47,10 @@ def request(method, path, params=None, body=None, private=False):
     query = "?" + urllib.parse.urlencode(params) if params else ""
     request_path = path + query
     body_text = json.dumps(body, separators=(",", ":"), ensure_ascii=False) if body is not None else ""
-    headers = {"Content-Type": "application/json"}
+        headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Python/3.11"
+    }
 
     if private:
         message_time = timestamp()
