@@ -13,6 +13,20 @@
         "orderType": "market"
       },
       "time": "2026-11-28T01:22:51.416Z"
+    },
+    "ETH-USDT-SWAP:long": {
+      "ordId": "4138282674937950209",
+      "size": "0.29",
+      "avgPx": "1668.91",
+      "protection": {
+        "algoClOrdId": "a25f739320964909b9be216b",
+        "avgPx": "1668.91",
+        "tp": "1769.05",
+        "sl": "1618.84",
+        "triggerType": "mark",
+        "orderType": "market"
+      },
+      "time": "2026-11-28T02:27:16.505Z"
     }
   },
   "pending": null,
