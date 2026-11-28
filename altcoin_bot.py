@@ -90,16 +90,27 @@ def api(method, path, params=None, body=None, private=False):
         headers=headers,
         method=method,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as res:
-            raw = res.read().decode()
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")[:600]
-        raise RuntimeError(f"HTTP {e.code}: {detail}") from None
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"网络连接失败: {e.reason}") from None
-    except TimeoutError:
-        raise RuntimeError("请求超时；订单结果可能未知，必须先查询交易所订单") from None
+    raw = None
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as res:
+                raw = res.read().decode()
+            break
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")[:600]
+            if method == "GET" and e.code == 429 and attempt < 3:
+                wait = 2 ** attempt
+                print(f"OKX请求限流(HTTP 429)，{wait}秒后重试只读请求")
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"HTTP {e.code}: {detail}") from None
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"网络连接失败: {e.reason}") from None
+        except TimeoutError:
+            raise RuntimeError("请求超时；订单结果可能未知，必须先查询交易所订单") from None
+
+    if raw is None:
+        raise RuntimeError("OKX只读请求重试后仍未取得响应")
 
     try:
         result = json.loads(raw)
@@ -601,8 +612,10 @@ def reconcile_state():
     if s.get("pending"):
         raise RuntimeError("存在未处理订单，禁止自动对账后继续交易")
     changed = False
+    actual_by_inst = {}
     for inst in MANAGED_SYMBOLS:
         actual = positions(inst)
+        actual_by_inst[inst] = actual
         for side in ("long", "short"):
             k = key_for(inst, side)
             local = s["positions"].get(k)
@@ -635,6 +648,7 @@ def reconcile_state():
     if changed:
         s["pending"] = None
         save_state(s)
+    return actual_by_inst
 
 
 # ================= 平仓 =================
@@ -682,12 +696,12 @@ def run_once():
     if s.get("pending"):
         raise RuntimeError("上次执行留下未处理订单，停止运行")
     check_account()
-    reconcile_state()
+    actual_by_inst = reconcile_state()
 
-    open_count = sum(len(positions(symbol)) for symbol in MANAGED_SYMBOLS)
+    open_count = sum(len(actual_by_inst.get(symbol, {})) for symbol in MANAGED_SYMBOLS)
     for inst in SYMBOLS:
         info = instrument(inst)
-        actual = positions(inst)
+        actual = actual_by_inst.get(inst, {})
         sig = signal(inst)
         opposite = "short" if sig == "long" else "long" if sig == "short" else None
         if opposite and opposite in actual:
