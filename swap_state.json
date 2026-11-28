@@ -1,19 +1,5 @@
 {
   "positions": {
-    "BTC-USDT-SWAP:short": {
-      "ordId": "4137538149269401601",
-      "size": "0.08",
-      "avgPx": "59720.9",
-      "protection": {
-        "algoClOrdId": "074ef44898f44213a7d05b81",
-        "avgPx": "59720.9",
-        "tp": "56137.6",
-        "sl": "61512.6",
-        "triggerType": "mark",
-        "orderType": "market"
-      },
-      "time": "2026-11-27T20:17:27.968Z"
-    },
     "ETH-USDT-SWAP:short": {
       "ordId": "4137538266810576897",
       "size": "0.29",
