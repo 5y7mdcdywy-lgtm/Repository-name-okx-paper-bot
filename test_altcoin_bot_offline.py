@@ -6,6 +6,10 @@ import altcoin_bot
 
 
 class AltcoinOfflineTests(unittest.TestCase):
+    def test_sol_is_excluded_from_entries_but_kept_for_position_management(self):
+        self.assertNotIn("SOL-USDT-SWAP", altcoin_bot.SYMBOLS)
+        self.assertIn("SOL-USDT-SWAP", altcoin_bot.MANAGED_SYMBOLS)
+
     def test_volume_expansion_accepts_at_least_110_percent(self):
         volumes = [D("100")] * 20 + [D("110")]
         self.assertTrue(altcoin_bot.volume_expansion(volumes))
