@@ -13,7 +13,9 @@ from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 # ================= 配置 =================
 BASE = os.getenv("OKX_BASE_URL", "https://openapi.okx.com").rstrip("/")
-SYMBOLS = ["SOL-USDT-SWAP", "XRP-USDT-SWAP", "DOGE-USDT-SWAP", "ADA-USDT-SWAP", "LINK-USDT-SWAP", "AVAX-USDT-SWAP", "DOT-USDT-SWAP", "SUI-USDT-SWAP"]
+SYMBOLS = ["XRP-USDT-SWAP", "DOGE-USDT-SWAP", "ADA-USDT-SWAP", "LINK-USDT-SWAP", "AVAX-USDT-SWAP", "DOT-USDT-SWAP", "SUI-USDT-SWAP"]
+# SOL已从新开仓白名单移除；仍纳入持仓对账，避免遗留仓位失去监控。
+MANAGED_SYMBOLS = SYMBOLS + ["SOL-USDT-SWAP"]
 
 LEVERAGE = Decimal("5")
 MARGIN_USDT = Decimal("5")
@@ -599,7 +601,7 @@ def reconcile_state():
     if s.get("pending"):
         raise RuntimeError("存在未处理订单，禁止自动对账后继续交易")
     changed = False
-    for inst in SYMBOLS:
+    for inst in MANAGED_SYMBOLS:
         actual = positions(inst)
         for side in ("long", "short"):
             k = key_for(inst, side)
@@ -682,7 +684,7 @@ def run_once():
     check_account()
     reconcile_state()
 
-    open_count = sum(len(positions(symbol)) for symbol in SYMBOLS)
+    open_count = sum(len(positions(symbol)) for symbol in MANAGED_SYMBOLS)
     for inst in SYMBOLS:
         info = instrument(inst)
         actual = positions(inst)
@@ -766,7 +768,7 @@ def main():
         inst = pending.get("instId")
         cl_id = pending.get("clOrdId")
 
-        if inst not in SYMBOLS or not cl_id:
+        if inst not in MANAGED_SYMBOLS or not cl_id:
             raise RuntimeError("旧订单记录信息不完整，停止运行")
 
         print("正在核实旧订单:", inst, cl_id)
@@ -846,7 +848,7 @@ def main():
         if state not in ("filled", "canceled", "mmp_canceled"):
             raise RuntimeError("旧订单状态未确认结束：" + str(state))
         # 核对山寨币白名单合约的实际持仓
-        for symbol in SYMBOLS:
+        for symbol in MANAGED_SYMBOLS:
             actual = positions(symbol)
             if actual:
                 raise RuntimeError(
