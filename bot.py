@@ -317,10 +317,20 @@ def signal(inst):
         return None
     e5, e13 = ema(five, 5), ema(five, 13)
     r, e20 = rsi(five, 14), ema(fifteen, 20)
-    print(inst, "EMA5", e5, "EMA13", e13, "RSI", r, "15m EMA20", e20)
-    if e5 > e13 and five[-1] > e13 and fifteen[-1] > e20 and r >= 52:
+    # 过滤横盘：要求短周期均线有足够间距，且5m/15m趋势斜率同向
+    e13_prev = ema(five[:-3], 13)
+    e20_prev = ema(fifteen[:-2], 20)
+    spread = abs(e5 - e13) / five[-1] if five[-1] > 0 else D(0)
+    print(inst, "EMA5", e5, "EMA13", e13, "RSI", r, "15m EMA20", e20,
+          "EMA spread", spread, "5m slope", e13 - e13_prev,
+          "15m slope", e20 - e20_prev)
+    if (e5 > e13 and five[-1] > e13 and fifteen[-1] > e20
+            and e13 > e13_prev and e20 > e20_prev
+            and spread >= D("0.0015") and r >= 55):
         return "long"
-    if e5 < e13 and five[-1] < e13 and fifteen[-1] < e20 and r <= 48:
+    if (e5 < e13 and five[-1] < e13 and fifteen[-1] < e20
+            and e13 < e13_prev and e20 < e20_prev
+            and spread >= D("0.0015") and r <= 45):
         return "short"
     return None
 
@@ -659,14 +669,11 @@ def run_once():
     for inst in SYMBOLS:
         info = instrument(inst)
         actual = positions(inst)
+        # 已有任何方向的仓位都不自动反手或平仓，避免震荡行情反复止损
+        if actual:
+            print(inst, "已有交易所持仓，保持原仓位及保护单，不执行反向操作")
+            continue
         sig = signal(inst)
-        opposite = "short" if sig == "long" else "long" if sig == "short" else None
-        if opposite and opposite in actual:
-            close_position(inst, opposite, actual[opposite])
-            continue
-        if sig and sig in actual:
-            print(inst, sig, "已有仓位，不重复开仓")
-            continue
         if sig:
             enter(inst, sig, info)
         else:
