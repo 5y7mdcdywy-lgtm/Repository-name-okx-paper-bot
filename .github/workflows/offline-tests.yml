@@ -1,0 +1,24 @@
+name: Offline Strategy Tests
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile bot
+        run: python -m py_compile bot.py test_bot_offline.py
+      - name: Run offline tests (no exchange credentials or orders)
+        run: python -m unittest -v test_bot_offline
