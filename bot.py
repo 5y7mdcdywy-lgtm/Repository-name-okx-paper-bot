@@ -293,6 +293,19 @@ def ema(values, period):
     return result
 
 
+def ema_last_two(values, period):
+    """Return the previous and latest EMA using one consistent calculation."""
+    if len(values) < period + 1:
+        raise RuntimeError("EMA斜率数据不足")
+    alpha = D(2) / D(period + 1)
+    result = sum(values[:period]) / D(period)
+    previous = result
+    for v in values[period:]:
+        previous = result
+        result = v * alpha + result * (D(1) - alpha)
+    return previous, result
+
+
 def rsi(values, period=14):
     if len(values) < period + 1:
         raise RuntimeError("RSI数据不足")
@@ -315,11 +328,11 @@ def signal(inst):
     if len(five) < 40 or len(fifteen) < 25:
         print(inst, "K线不足")
         return None
-    e5, e13 = ema(five, 5), ema(five, 13)
-    r, e20 = rsi(five, 14), ema(fifteen, 20)
+    e5 = ema(five, 5)
+    e13_prev, e13 = ema_last_two(five, 13)
+    r = rsi(five, 14)
+    e20_prev, e20 = ema_last_two(fifteen, 20)
     # 过滤横盘：要求短周期均线有足够间距，且5m/15m趋势斜率同向
-    e13_prev = ema(five[:-3], 13)
-    e20_prev = ema(fifteen[:-2], 20)
     spread = abs(e5 - e13) / five[-1] if five[-1] > 0 else D(0)
     print(inst, "EMA5", e5, "EMA13", e13, "RSI", r, "15m EMA20", e20,
           "EMA spread", spread, "5m slope", e13 - e13_prev,
