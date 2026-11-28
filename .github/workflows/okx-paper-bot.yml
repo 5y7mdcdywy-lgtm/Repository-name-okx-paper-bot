@@ -1,4 +1,4 @@
-name: OKX 5x Altcoin Live Bot
+name: OKX 3x Altcoin Live Bot
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: okx-5x-altcoin-live-bot
+  group: okx-3x-altcoin-live-bot
   cancel-in-progress: false
 
 jobs:
@@ -28,13 +28,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 执行一轮 OKX 五倍山寨币策略
+      - name: 执行一轮 OKX 三倍山寨币策略
         env:
           OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
           OKX_API_SECRET: ${{ secrets.OKX_API_SECRET }}
           OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
           ALTCOIN_LIVE_TRADING: ${{ secrets.ALTCOIN_LIVE_TRADING }}
-          CONFIRM_ALTCOIN_5X_LIVE: ${{ secrets.CONFIRM_ALTCOIN_5X_LIVE }}
+          CONFIRM_ALTCOIN_3X_LIVE: ${{ secrets.CONFIRM_ALTCOIN_5X_LIVE }}
         run: |
           set +e
           python altcoin_bot.py
@@ -47,7 +47,7 @@ jobs:
             git add altcoin_swap_state.json
 
             if ! git diff --cached --quiet; then
-              git commit -m "Save OKX 5x altcoin trading state"
+              git commit -m "Save OKX 3x altcoin trading state"
               git push origin HEAD:main
             fi
           fi
