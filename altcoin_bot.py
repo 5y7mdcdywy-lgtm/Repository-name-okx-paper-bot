@@ -274,6 +274,32 @@ def candles(inst, bar, limit):
     return [D(r[4]) for r in rows]
 
 
+def candles_with_quote_volume(inst, bar, limit):
+    """返回已完成K线收盘价与USDT计价成交额(volCcyQuote)。"""
+    rows = get("/api/v5/market/candles", {
+        "instId": inst, "bar": bar, "limit": str(limit)
+    }, private=False)
+    rows = [r for r in rows if len(r) > 8 and r[8] == "1"]
+    rows.reverse()
+    closes, quote_volumes = [], []
+    for row in rows:
+        if len(row) <= 8:
+            continue
+        closes.append(D(row[4]))
+        quote_volumes.append(D(row[7]))
+    return closes, quote_volumes
+
+
+def volume_expansion(volumes, lookback=20, multiplier=D("1.10")):
+    """最新已完成K线成交额至少为此前20根均值的1.10倍。"""
+    if len(volumes) < lookback + 1:
+        return False
+    baseline = sum(volumes[-lookback-1:-1]) / D(lookback)
+    if baseline <= 0:
+        return False
+    return volumes[-1] >= baseline * multiplier
+
+
 def ema(values, period):
     if len(values) < period:
         raise RuntimeError("EMA数据不足")
@@ -301,17 +327,26 @@ def rsi(values, period=14):
 
 
 def signal(inst):
-    five = candles(inst, "5m", 100)
+    five, quote_volumes = candles_with_quote_volume(inst, "5m", 100)
     fifteen = candles(inst, "15m", 60)
     if len(five) < 40 or len(fifteen) < 25:
         print(inst, "K线不足")
         return None
+    if not volume_expansion(quote_volumes):
+        print(inst, "5m成交额未放大，过滤信号")
+        return None
+
     e5, e13 = ema(five, 5), ema(five, 13)
     r, e20 = rsi(five, 14), ema(fifteen, 20)
-    print(inst, "EMA5", e5, "EMA13", e13, "RSI", r, "15m EMA20", e20)
-    if e5 > e13 and five[-1] > e13 and fifteen[-1] > e20 and r >= 52:
+    print(inst, "EMA5", e5, "EMA13", e13, "RSI", r,
+          "15m EMA20", e20, "成交额放大", True)
+
+    # RSI设上下限，避免追逐极端超买/超卖行情
+    if (e5 > e13 and five[-1] > e13 and fifteen[-1] > e20
+            and D("52") <= r <= D("68")):
         return "long"
-    if e5 < e13 and five[-1] < e13 and fifteen[-1] < e20 and r <= 48:
+    if (e5 < e13 and five[-1] < e13 and fifteen[-1] < e20
+            and D("32") <= r <= D("48")):
         return "short"
     return None
 
