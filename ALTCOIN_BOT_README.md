@@ -3,7 +3,7 @@
 - Entry point: `altcoin_bot.py`
 - Workflow: `.github/workflows/okx-altcoin-live-bot.yml`
 - Separate state: `altcoin_swap_state.json`
-- USDT-margined swaps only; allowlist: SOL, XRP, DOGE, ADA, LINK, AVAX, DOT, SUI.
+- USDT-margined swaps only; new-entry allowlist: XRP, DOGE, ADA, LINK, AVAX, DOT, SUI. SOL is excluded from new entries; it remains in position reconciliation so any pre-existing SOL position is still monitored.
 - Isolated margin, 5x leverage.
 - Maximum two simultaneous positions.
 - Per-position margin budget: 5 USDT.
