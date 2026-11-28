@@ -29,12 +29,14 @@ class StrategyOfflineTests(unittest.TestCase):
         def fake_positions(inst):
             return existing if inst == "BTC-USDT-SWAP" else {}
 
-        with patch.object(bot, "load_state", return_value={"pending": None}), \\
-             patch.object(bot, "check_account"), \\
-             patch.object(bot, "reconcile_state"), \\
-             patch.object(bot, "instrument", return_value={}), \\
-             patch.object(bot, "positions", side_effect=fake_positions), \\
-             patch.object(bot, "signal", return_value=None) as signal_mock:
+        with (
+            patch.object(bot, "load_state", return_value={"pending": None}),
+            patch.object(bot, "check_account"),
+            patch.object(bot, "reconcile_state"),
+            patch.object(bot, "instrument", return_value={}),
+            patch.object(bot, "positions", side_effect=fake_positions),
+            patch.object(bot, "signal", return_value=None) as signal_mock,
+        ):
             bot.run_once()
             self.assertEqual(signal_mock.call_count, 1)
             signal_mock.assert_called_once_with("ETH-USDT-SWAP")
