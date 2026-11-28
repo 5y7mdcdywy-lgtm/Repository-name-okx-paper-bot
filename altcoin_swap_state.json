@@ -1,0 +1,20 @@
+{
+  "positions": {
+    "DOGE-USDT-SWAP:long": {
+      "ordId": "4139738964063186945",
+      "size": "0.26",
+      "avgPx": "0.05663",
+      "protection": {
+        "algoClOrdId": "e3c9206d817b4bfcb0dbaf7a",
+        "avgPx": "0.05663",
+        "tp": "0.05805",
+        "sl": "0.05595",
+        "triggerType": "mark",
+        "orderType": "market"
+      },
+      "time": "2026-11-28T14:30:37.357Z"
+    }
+  },
+  "pending": null,
+  "halted": false
+}
