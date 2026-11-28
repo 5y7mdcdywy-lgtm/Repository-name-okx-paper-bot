@@ -1,34 +1,5 @@
 {
-  "positions": {
-    "BTC-USDT-SWAP:long": {
-      "ordId": "4138518144338915329",
-      "size": "0.08",
-      "avgPx": "60012.4",
-      "protection": {
-        "algoClOrdId": "2d3b689c2aba4cd0b5fb0312",
-        "avgPx": "60012.4",
-        "tp": "63613.2",
-        "sl": "58212.0",
-        "triggerType": "mark",
-        "orderType": "market"
-      },
-      "time": "2026-11-28T04:24:14.076Z"
-    },
-    "ETH-USDT-SWAP:long": {
-      "ordId": "4138518258927300609",
-      "size": "0.3",
-      "avgPx": "1664.64",
-      "protection": {
-        "algoClOrdId": "8df07524a1cc4b3388beec1b",
-        "avgPx": "1664.64",
-        "tp": "1764.52",
-        "sl": "1614.70",
-        "triggerType": "mark",
-        "orderType": "market"
-      },
-      "time": "2026-11-28T04:24:17.451Z"
-    }
-  },
+  "positions": {},
   "pending": null,
   "halted": false
 }
