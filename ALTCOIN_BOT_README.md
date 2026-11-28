@@ -8,7 +8,9 @@
 - Maximum two simultaneous positions.
 - Per-position margin budget: 5 USDT.
 - Take-profit trigger: 2.5%; stop-loss trigger: 1.2%.
-- Signal: completed 5m EMA(5/13) + RSI(14), filtered by completed 15m EMA(20).
+- Signal: completed 5m EMA(5/13) + RSI(14) + 5m quote-volume expansion (latest closed candle >= 1.10x prior 20-candle average), filtered by completed 15m EMA(20).
+- RSI entry band: 52-68 for long and 32-48 for short, avoiding the most extended momentum readings.
+- Offline unit tests: `test_altcoin_bot_offline.py`; included in the shared offline test workflow.
 - Runs every five minutes and can also be started manually.
 
 ## Safety gate
