@@ -19,6 +19,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile bot
-        run: python -m py_compile bot.py test_bot_offline.py
+        run: python -m py_compile bot.py altcoin_bot.py test_bot_offline.py test_altcoin_bot_offline.py
       - name: Run offline tests (no exchange credentials or orders)
-        run: python -m unittest -v test_bot_offline
+        run: python -m unittest -v test_bot_offline test_altcoin_bot_offline
