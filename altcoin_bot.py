@@ -17,7 +17,7 @@ SYMBOLS = ["XRP-USDT-SWAP", "DOGE-USDT-SWAP", "ADA-USDT-SWAP", "LINK-USDT-SWAP",
 # SOL已从新开仓白名单移除；仍纳入持仓对账，避免遗留仓位失去监控。
 MANAGED_SYMBOLS = SYMBOLS + ["SOL-USDT-SWAP"]
 
-LEVERAGE = Decimal("5")
+LEVERAGE = Decimal("3")
 MARGIN_USDT = Decimal("5")
 TAKE_PROFIT = Decimal("0.025")
 STOP_LOSS = Decimal("0.012")
@@ -30,7 +30,7 @@ POLL_SECONDS = 2
 
 DEMO = os.getenv("ALTCOIN_DEMO_TRADING", "false").lower() == "true"
 LIVE = os.getenv("ALTCOIN_LIVE_TRADING", "false").lower() == "true"
-CONFIRM = os.getenv("CONFIRM_ALTCOIN_5X_LIVE", "").strip()
+CONFIRM = os.getenv("CONFIRM_ALTCOIN_3X_LIVE", "").strip()
 
 # Demo credentials are strictly separated from live credentials.
 if DEMO:
@@ -204,10 +204,10 @@ def set_leverage(inst):
     }
     if actual.get("long") != LEVERAGE or actual.get("short") != LEVERAGE:
         raise RuntimeError(
-            f"{inst}当前双向逐仓杠杆不是5倍；机器人不会自动修改账户。"
+            f"{inst}当前双向逐仓杠杆不是{LEVERAGE}倍；机器人不会自动修改账户。"
             f"请先在OKX手动核对并设置后再运行。回读：{rows}"
         )
-    print(inst, "双向逐仓5倍杠杆只读核验通过")
+    print(inst, f"双向逐仓{LEVERAGE}倍杠杆只读核验通过")
 
 def instrument(inst):
     rows = get("/api/v5/public/instruments", {
@@ -750,7 +750,7 @@ def main():
     if DEMO:
         if not KEY or not SECRET or not PASSPHRASE:
             raise RuntimeError("模拟盘开关已启用，但缺少独立OKX模拟盘API凭据")
-        print("OKX山寨币超短线策略启动（模拟盘，5倍逐仓）；请求带模拟交易标记。")
+        print("OKX山寨币超短线策略启动（模拟盘，3倍逐仓）；请求带模拟交易标记。")
     elif not LIVE or CONFIRM != "YES":
         preflight()
         print("实盘开关未启用；本轮只读检查结束，不会交易。")
@@ -758,7 +758,7 @@ def main():
     else:
         if not KEY or not SECRET or not PASSPHRASE:
             raise RuntimeError("实盘开关已启用，但缺少OKX API凭据")
-        print("OKX山寨币超短线策略启动（实盘，5倍逐仓）")
+        print("OKX山寨币超短线策略启动（实盘，3倍逐仓）")
     check_account()
 
     s = load_state()
